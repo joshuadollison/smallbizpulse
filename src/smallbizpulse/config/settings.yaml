@@ -1,0 +1,7 @@
+project:
+  name: smallbizpulse
+paths:
+  data_raw: data/raw
+  data_interim: data/interim
+  data_processed: data/processed
+  outputs: outputs
