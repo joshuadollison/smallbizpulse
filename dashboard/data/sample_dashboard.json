@@ -1,0 +1,30 @@
+{
+  "generated_at": "2026-02-11T12:00:00Z",
+  "kpis": [
+    {"label": "Restaurants Monitored", "value": 4129, "change": 2.1, "direction": "up"},
+    {"label": "At-Risk (14d)", "value": 178, "change": -8.3, "direction": "down"},
+    {"label": "Closures YTD", "value": 52, "change": 12.0, "direction": "up"},
+    {"label": "Avg Sentiment (90d)", "value": 0.14, "change": 0.03, "direction": "up"}
+  ],
+  "trend": [
+    {"period": "2025-09", "at_risk": 132, "closures": 34},
+    {"period": "2025-10", "at_risk": 146, "closures": 35},
+    {"period": "2025-11", "at_risk": 151, "closures": 38},
+    {"period": "2025-12", "at_risk": 165, "closures": 41},
+    {"period": "2026-01", "at_risk": 184, "closures": 48},
+    {"period": "2026-02", "at_risk": 178, "closures": 52}
+  ],
+  "topics": [
+    {"topic": "Service speed", "weight": 0.31, "recommendation": "Cross-train staff and tighten ticket times."},
+    {"topic": "Food consistency", "weight": 0.27, "recommendation": "Standardize prep; add QA tasting at rush."},
+    {"topic": "Cleanliness", "weight": 0.18, "recommendation": "Front-of-house audit and close-time checklist."},
+    {"topic": "Staff attitude", "weight": 0.14, "recommendation": "Customer service coaching and clear scripts."},
+    {"topic": "Price/value", "weight": 0.10, "recommendation": "Bundle offers; adjust portions on slow nights."}
+  ],
+  "alerts": [
+    {"name": "Nomad Noodles", "city": "Portland, OR", "risk": "High", "sentiment": -0.44, "last_review": "2026-02-08", "lead_issue": "Service speed"},
+    {"name": "Sunset Tacos", "city": "Phoenix, AZ", "risk": "Medium", "sentiment": -0.28, "last_review": "2026-02-07", "lead_issue": "Price/value"},
+    {"name": "Harbor House", "city": "Boston, MA", "risk": "High", "sentiment": -0.37, "last_review": "2026-02-06", "lead_issue": "Cleanliness"},
+    {"name": "Maple & Main", "city": "Columbus, OH", "risk": "Watch", "sentiment": -0.12, "last_review": "2026-02-05", "lead_issue": "Food consistency"}
+  ]
+}

@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="SmallBizPulse early warning dashboard for independent restaurants" />
+  <title>{{ app_name }} | Placeholder Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Work+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <div class="bg-overlay"></div>
+  <header class="shell header">
+    <div class="brand">
+      <div class="brand-mark">SB</div>
+      <div>
+        <p class="eyebrow">Early Warning · Beta</p>
+        <p class="brand-title">{{ app_name }}</p>
+      </div>
+    </div>
+    <div class="header-actions">
+      <span class="pill">{{ generated_at or "No data yet" }}</span>
+      <a class="ghost-btn" href="https://render.com/docs/deploy-flask" target="_blank" rel="noreferrer">Render deploy guide</a>
+    </div>
+  </header>
+
+  <main class="shell main">
+    <section class="hero">
+      <div>
+        <p class="eyebrow">Community resiliency</p>
+        <h1>Spot at-risk restaurants before closures ripple through neighborhoods.</h1>
+        <p class="lede">{{ tagline }}</p>
+        <div class="hero-actions">
+          <a class="solid-btn" href="#deploy">View deploy steps</a>
+          <a class="ghost-btn" href="https://github.com/paxtaeo/diabetes_prediction_app" target="_blank" rel="noreferrer">See reference app</a>
+        </div>
+      </div>
+      <div class="hero-chip">
+        <p class="label">Status</p>
+        <p class="value">Placeholder data only</p>
+        <p class="muted">Connect your model + Yelp exports when ready.</p>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel__header">
+        <div>
+          <p class="eyebrow">Weekly pulse</p>
+          <h2>Key indicators</h2>
+        </div>
+        <span class="muted">Autoloads from sample_dashboard.json</span>
+      </div>
+      <div id="kpi-grid" class="kpi-grid" aria-live="polite">
+        <div class="kpi skeleton"></div>
+        <div class="kpi skeleton"></div>
+        <div class="kpi skeleton"></div>
+        <div class="kpi skeleton"></div>
+      </div>
+    </section>
+
+    <section class="split">
+      <div class="panel">
+        <div class="panel__header">
+          <div>
+            <p class="eyebrow">Trend</p>
+            <h2>At-risk trajectory</h2>
+          </div>
+          <span class="muted">Shows at-risk count + closures</span>
+        </div>
+        <canvas id="trendChart" height="200" role="img" aria-label="Line chart of at-risk restaurants over time"></canvas>
+      </div>
+
+      <div class="panel">
+        <div class="panel__header">
+          <div>
+            <p class="eyebrow">Diagnostics</p>
+            <h2>Top issues & interventions</h2>
+          </div>
+          <span class="muted">Ready for topic modeling outputs</span>
+        </div>
+        <div id="topics-list" class="topics"></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel__header">
+        <div>
+          <p class="eyebrow">Intervention queue</p>
+          <h2>At-risk restaurants</h2>
+        </div>
+        <span class="muted">Sorted by risk level</span>
+      </div>
+      <div class="table" role="table" aria-label="At-risk restaurants">
+        <div class="table__row table__row--head" role="row">
+          <span role="columnheader">Restaurant</span>
+          <span role="columnheader">City</span>
+          <span role="columnheader">Risk</span>
+          <span role="columnheader">Sentiment</span>
+          <span role="columnheader">Lead Issue</span>
+          <span role="columnheader">Last Review</span>
+        </div>
+        <div id="alerts-list" role="rowgroup"></div>
+      </div>
+    </section>
+
+    <section id="deploy" class="panel">
+      <div class="panel__header">
+        <div>
+          <p class="eyebrow">Render-ready</p>
+          <h2>Deploy in minutes</h2>
+        </div>
+      </div>
+      <ol class="deploy-steps">
+        <li><strong>1)</strong> Push this repo to GitHub (public or private).</li>
+        <li><strong>2)</strong> In Render, create a new <em>Web Service</em> from the repo.</li>
+        <li><strong>3)</strong> When prompted, set <code>Root Directory</code> to <code>dashboard</code>.</li>
+        <li><strong>4)</strong> Render will detect Python; keep <code>build</code>: <code>pip install -r requirements.txt</code>.</li>
+        <li><strong>5)</strong> Set <code>start</code>: <code>gunicorn app.main:app</code>.</li>
+        <li><strong>6)</strong> Optional env vars: <code>APP_NAME</code>, <code>APP_TAGLINE</code>, <code>PORT</code>.</li>
+      </ol>
+      <p class="muted">Local run: <code>cd dashboard && pip install -r requirements.txt && flask --app app run</code></p>
+    </section>
+  </main>
+
+  <footer class="shell footer">
+    <span>SmallBizPulse placeholder dashboard · connects to Yelp sentiment, topics, and risk scores when ready.</span>
+  </footer>
+
+  <script src="{{ url_for('static', filename='app.js') }}" defer></script>
+</body>
+</html>

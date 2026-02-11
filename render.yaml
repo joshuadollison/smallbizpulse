@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: smallbizpulse-dashboard
+    env: python
+    rootDir: dashboard
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app.main:app
+    envVars:
+      - key: FLASK_ENV
+        value: production
