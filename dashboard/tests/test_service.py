@@ -299,6 +299,32 @@ def test_inference_windows_right_censor_open_latest_horizon(
     assert windows is None
 
 
+def test_build_monthly_panel_keeps_sparse_months(
+    artifact_bundle: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service_from_bundle(artifact_bundle, monkeypatch)
+
+    sentiment_df = pd.DataFrame(
+        {
+            "review_id": ["r1", "r2", "r3"],
+            "business_id": ["live-1", "live-1", "live-1"],
+            "date": pd.to_datetime(["2018-01-10", "2018-01-20", "2018-03-05"]),
+            "stars": [5, 3, 4],
+            "p_pos": [0.9, 0.2, 0.8],
+            "p_neg": [0.1, 0.8, 0.2],
+            "text": ["a", "b", "c"],
+        }
+    )
+    identity = {"business_id": "live-1", "status": "Open"}
+
+    monthly = service._build_monthly_panel(sentiment_df, identity)  # noqa: SLF001 - internal behavior
+
+    months = [str(m.date()) for m in monthly["month"]]
+    assert months == ["2018-01-01", "2018-03-01"]
+    assert monthly["review_count"].tolist() == [2, 1]
+
+
 def test_inference_windows_include_open_when_horizon_observed(
     artifact_bundle: dict[str, object],
     monkeypatch: pytest.MonkeyPatch,

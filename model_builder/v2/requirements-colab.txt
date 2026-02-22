@@ -1,0 +1,7 @@
+-r requirements-core.txt
+
+# Component 2 topic modeling stack
+bertopic>=0.16
+sentence-transformers>=2.6
+umap-learn>=0.5
+hdbscan>=0.8

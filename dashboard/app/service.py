@@ -1052,15 +1052,8 @@ class SmallBizPulseService:
             .reset_index(drop=True)
         )
 
-        if not monthly.empty:
-            all_months = pd.date_range(monthly["month"].min(), monthly["month"].max(), freq="MS")
-            monthly = (
-                monthly.set_index("month")
-                .reindex(all_months)
-                .rename_axis("month")
-                .reset_index()
-            )
-
+        # Keep sparse month rows (months with activity only) to mirror model training
+        # and candidate scoreability checks.
         monthly["review_count"] = pd.to_numeric(monthly["review_count"], errors="coerce").fillna(0).astype(int)
         monthly["avg_stars"] = pd.to_numeric(monthly["avg_stars"], errors="coerce").fillna(3.0)
         monthly["tx_sent_mean"] = pd.to_numeric(monthly["tx_sent_mean"], errors="coerce").fillna(0.5)
