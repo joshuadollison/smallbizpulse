@@ -352,7 +352,6 @@ def _build_balanced_training_datasets(
 
 
 def _build_gru_model(*, sequence_length: int, n_features: int, base_rate_bias: float) -> Any:
-    import tensorflow as tf
     from tensorflow import keras
     from tensorflow.keras import layers
 
@@ -368,8 +367,8 @@ def _build_gru_model(*, sequence_length: int, n_features: int, base_rate_bias: f
 
     attention = layers.Dense(1)(hidden)
     attention = layers.Softmax(axis=1, name="attn_softmax")(attention)
-    hidden = layers.Multiply()([hidden, attention])
-    hidden = layers.Lambda(lambda tensor: tf.reduce_sum(tensor, axis=1), name="attn_pool_sum")(hidden)
+    hidden = layers.Dot(axes=(1, 1), name="attn_pool_dot")([attention, hidden])
+    hidden = layers.Flatten(name="attn_pool_flatten")(hidden)
 
     hidden = layers.Dense(64, activation="relu")(hidden)
     hidden = layers.Dropout(0.25)(hidden)

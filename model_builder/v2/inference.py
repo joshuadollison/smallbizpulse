@@ -124,7 +124,24 @@ class SurvivalRuntime:
         except Exception:
             return None
 
-        self._gru_model = keras.models.load_model(self.artifacts.gru_model_path)
+        model_path = self.artifacts.gru_model_path
+        try:
+            self._gru_model = keras.models.load_model(model_path, compile=False)
+        except Exception as primary_error:
+            try:
+                # Backward compatibility for older artifacts saved with Python Lambda layers.
+                self._gru_model = keras.models.load_model(
+                    model_path,
+                    compile=False,
+                    safe_mode=False,
+                )
+                print(
+                    "Warning: Loaded GRU model with safe_mode=False for legacy Lambda compatibility."
+                )
+            except TypeError:
+                raise primary_error
+            except Exception:
+                raise primary_error
         return self._gru_model
 
     def _assign_risk_bucket(self, score: float | None) -> str | None:
