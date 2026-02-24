@@ -150,6 +150,17 @@ def create_app() -> Flask:
                                 "evidence_reviews": [],
                                 "recommendations_top3": [],
                                 "recommendation_notes": None,
+                                "component2_diagnostics": {
+                                    "negative_review_count": None,
+                                    "terminal_topics": [],
+                                    "topic_recovery_gaps": [],
+                                },
+                                "resilience_context": {
+                                    "city_context": None,
+                                    "cuisine_context": [],
+                                    "checkin_floor_context": None,
+                                    "recovery_pattern": None,
+                                },
                                 "scoring_mode": "artifact",
                                 "availability": "not_scored_yet",
                                 "not_scored_reason": "business_not_found",

@@ -28,6 +28,45 @@ class InferenceDependencyError(RuntimeError):
     """Raised when runtime inference dependencies are unavailable."""
 
 
+def _load_joblib_bundle_with_compat(joblib_module: Any, path: Path) -> dict[str, Any]:
+    """
+    Load a joblib bundle with a compatibility retry for NumPy bit-generator pickles.
+
+    Some training environments persist RandomState payloads that encode bit-generator
+    classes (e.g. ``<class '...PCG64'>``) instead of string names. Newer NumPy
+    runtimes reject that form during unpickling. We normalize to class names and retry.
+    """
+    try:
+        return joblib_module.load(path)
+    except ValueError as exc:
+        if "known BitGenerator module" not in str(exc):
+            raise
+
+    try:
+        from numpy.random import _pickle as np_pickle
+    except Exception:
+        raise
+
+    original_ctor = getattr(np_pickle, "__bit_generator_ctor", None)
+    if original_ctor is None:
+        raise
+
+    def _compat_ctor(bit_generator_name: Any = "MT19937") -> Any:
+        if isinstance(bit_generator_name, type):
+            normalized = bit_generator_name.__name__
+        elif isinstance(bit_generator_name, str):
+            normalized = bit_generator_name
+        else:
+            normalized = str(bit_generator_name)
+        return original_ctor(normalized)
+
+    np_pickle.__bit_generator_ctor = _compat_ctor
+    try:
+        return joblib_module.load(path)
+    finally:
+        np_pickle.__bit_generator_ctor = original_ctor
+
+
 @dataclass(frozen=True)
 class SurvivalRuntimeArtifacts:
     output_dir: Path
@@ -47,6 +86,7 @@ class SurvivalRuntime:
     sequence_config: SequenceWindowConfig | None = None
     gru_threshold: float | None = None
     gru_recent_k_windows: int = 3
+    baseline_load_error: str | None = None
 
     _gru_model: Any | None = None
 
@@ -69,7 +109,12 @@ class SurvivalRuntime:
         if not rule_model_path.exists():
             raise FileNotFoundError(f"missing rule model file: {rule_model_path}")
 
-        baseline_bundle = joblib.load(baseline_bundle_path)
+        baseline_load_error: str | None = None
+        try:
+            baseline_bundle = _load_joblib_bundle_with_compat(joblib, baseline_bundle_path)
+        except Exception as exc:
+            baseline_bundle = {"models": {}, "feature_columns": [], "thresholds": {}}
+            baseline_load_error = f"{exc.__class__.__name__}: {exc}"
 
         rule_payload = json.loads(rule_model_path.read_text(encoding="utf-8"))
         rule_model = RuleBasedRiskModel(
@@ -111,6 +156,7 @@ class SurvivalRuntime:
             sequence_config=sequence_config,
             gru_threshold=gru_threshold,
             gru_recent_k_windows=gru_recent_k_windows,
+            baseline_load_error=baseline_load_error,
         )
 
     def _load_gru_model(self) -> Any | None:
@@ -172,7 +218,12 @@ class SurvivalRuntime:
         thresholds = self.baseline_bundle.get("thresholds", {})
 
         if not models or not feature_columns:
-            raise ValueError("baseline bundle missing models or feature columns")
+            frame = snapshot_features.copy()
+            frame["baseline_model"] = "unavailable"
+            frame["baseline_score"] = np.nan
+            frame["baseline_threshold"] = np.nan
+            frame["baseline_flagged"] = 0
+            return frame
 
         frame = snapshot_features.copy()
         X = frame[feature_columns].apply(pd.to_numeric, errors="coerce").fillna(0.0).to_numpy(dtype=float)
@@ -284,9 +335,15 @@ class SurvivalRuntime:
         baseline["rule_score"] = self._rule_scores(baseline)
 
         low_data_mask = pd.to_numeric(baseline["total_reviews"], errors="coerce").fillna(0.0) <= 5
+        baseline_available_mask = baseline["baseline_score"].notna()
+
         baseline["risk_score"] = baseline["baseline_score"].astype(float)
+        baseline["risk_source"] = np.where(baseline_available_mask, "baseline", "rule")
+        baseline.loc[~baseline_available_mask, "risk_score"] = baseline.loc[
+            ~baseline_available_mask, "rule_score"
+        ].astype(float)
         baseline.loc[low_data_mask, "risk_score"] = baseline.loc[low_data_mask, "rule_score"].astype(float)
-        baseline["risk_source"] = np.where(low_data_mask, "rule", "baseline")
+        baseline.loc[low_data_mask, "risk_source"] = "rule"
 
         gru_scores = self._gru_scores(monthly_panel)
         if not gru_scores.empty:

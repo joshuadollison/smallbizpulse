@@ -15,16 +15,16 @@ else
 fi
 PORT="${PORT:-${DEFAULT_PORT}}"
 DEFAULT_YELP_DIR="${ROOT_DIR}/data/external/yelp_dataset_new"
+DEFAULT_V2_BUNDLE_DIR="${ROOT_DIR}/models/v2_artifacts/v2_artifacts_colab_bundle"
 
 export SBP_ENABLE_LIVE_FALLBACK="${SBP_ENABLE_LIVE_FALLBACK:-true}"
 export SBP_PREFER_LIVE_SCORING="${SBP_PREFER_LIVE_SCORING:-true}"
 export SBP_YELP_DATA_DIR="${SBP_YELP_DATA_DIR:-${DEFAULT_YELP_DIR}}"
-export SBP_GRU_WORKER_TIMEOUT_SECONDS="${SBP_GRU_WORKER_TIMEOUT_SECONDS:-300}"
-export SBP_GRU_WORKER_CONDA_ENV="${SBP_GRU_WORKER_CONDA_ENV:-sbp-gru-legacy311}"
+export SBP_V2_BUNDLE_DIR="${SBP_V2_BUNDLE_DIR:-${DEFAULT_V2_BUNDLE_DIR}}"
 
 if [[ ! -f "${SBP_YELP_DATA_DIR}/yelp_academic_dataset_business.json" ]] || [[ ! -f "${SBP_YELP_DATA_DIR}/yelp_academic_dataset_review.json" ]]; then
   echo "Warning: Yelp files not found in SBP_YELP_DATA_DIR=${SBP_YELP_DATA_DIR}"
-  echo "Live fallback will return not_scored_yet until those files are present."
+  echo "Live scoring will return not_scored_yet until those files are present."
 fi
 
 echo "Running dashboard with conda env: ${CONDA_ENV}"
@@ -32,7 +32,7 @@ echo "SBP_APP_SERVER=${APP_SERVER}"
 echo "SBP_ENABLE_LIVE_FALLBACK=${SBP_ENABLE_LIVE_FALLBACK}"
 echo "SBP_PREFER_LIVE_SCORING=${SBP_PREFER_LIVE_SCORING}"
 echo "SBP_YELP_DATA_DIR=${SBP_YELP_DATA_DIR}"
-echo "SBP_GRU_WORKER_CONDA_ENV=${SBP_GRU_WORKER_CONDA_ENV}"
+echo "SBP_V2_BUNDLE_DIR=${SBP_V2_BUNDLE_DIR}"
 echo "URL: http://${HOST}:${PORT}"
 if [[ "${APP_SERVER}" == "flask" ]]; then
   exec conda run -n "${CONDA_ENV}" flask --app app run --host "${HOST}" --port "${PORT}"

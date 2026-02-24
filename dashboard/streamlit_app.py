@@ -33,6 +33,12 @@ def _format_prob(value: Any) -> str:
     return "—"
 
 
+def _format_pct(value: Any, digits: int = 1) -> str:
+    if isinstance(value, (int, float)):
+        return f"{float(value) * 100:.{digits}f}%"
+    return "—"
+
+
 def _format_not_scored_reason(reason: Any) -> str:
     text = str(reason or "").strip()
     if not text:
@@ -53,6 +59,66 @@ def _to_datetime_series(df: pd.DataFrame, column: str) -> pd.DataFrame:
     return out.dropna(subset=[column])
 
 
+def _render_search_table_with_action(
+    rows: list[dict[str, Any]],
+    *,
+    key_prefix: str,
+    action_label: str,
+) -> str | None:
+    if not rows:
+        return None
+
+    frame = pd.DataFrame(rows)
+    if frame.empty or "business_id" not in frame.columns:
+        return None
+
+    display_frame = frame.drop(columns=["business_id"], errors="ignore").copy()
+    display_frame = display_frame.fillna("—")
+
+    selection_rows: list[int] = []
+    try:
+        event = st.dataframe(
+            display_frame,
+            use_container_width=True,
+            hide_index=True,
+            on_select="rerun",
+            selection_mode="single-row",
+            key=f"{key_prefix}_table",
+        )
+        if isinstance(event, dict):
+            selection_rows = event.get("selection", {}).get("rows", []) or []
+        else:
+            selection = getattr(event, "selection", None)
+            if isinstance(selection, dict):
+                selection_rows = selection.get("rows", []) or []
+    except TypeError:
+        # Fallback for older Streamlit builds without row selection support.
+        st.dataframe(display_frame, use_container_width=True, hide_index=True)
+
+    selected_id_key = f"{key_prefix}_selected_business_id"
+    if selection_rows:
+        selected_idx = int(selection_rows[0])
+        if 0 <= selected_idx < len(frame):
+            st.session_state[selected_id_key] = str(frame.iloc[selected_idx]["business_id"])
+
+    selected_business_id = st.session_state.get(selected_id_key)
+    if selected_business_id:
+        selected_row = frame[frame["business_id"].astype(str) == str(selected_business_id)]
+        if not selected_row.empty:
+            selected_name = str(selected_row.iloc[0].get("name") or "Unknown")
+            st.caption(f"Selected: {selected_name} ({selected_business_id})")
+
+    action_clicked = st.button(
+        action_label,
+        key=f"{key_prefix}_action_button",
+        use_container_width=False,
+        disabled=not selected_business_id,
+    )
+    if action_clicked and selected_business_id:
+        return str(selected_business_id)
+    return None
+
+
 def _render_trend_charts(result: dict[str, Any]) -> None:
     chart_data = result.get("chart_data") or {}
 
@@ -60,6 +126,7 @@ def _render_trend_charts(result: dict[str, Any]) -> None:
     rating_bucket_df = pd.DataFrame(chart_data.get("rating_bucket_counts_by_month") or [])
     predicted_df = pd.DataFrame(chart_data.get("predicted_close_by_month") or [])
     topics_df = pd.DataFrame(chart_data.get("topics_by_month") or [])
+    topics_class_df = pd.DataFrame(chart_data.get("topics_per_class") or [])
     actual_close_month = chart_data.get("actual_close_month")
 
     if ratings_df.empty:
@@ -121,7 +188,7 @@ def _render_trend_charts(result: dict[str, Any]) -> None:
                 rating_bucket_df["stars_bucket_label"] = rating_bucket_df["stars_bucket"].astype(str) + "★"
                 bucket_chart = (
                     alt.Chart(rating_bucket_df)
-                    .mark_bar()
+                    .mark_line(point=True, strokeWidth=2.5)
                     .encode(
                         x=alt.X("month:T", title="Month"),
                         y=alt.Y("count:Q", title="Review count"),
@@ -261,38 +328,319 @@ def _render_trend_charts(result: dict[str, Any]) -> None:
 
     st.markdown("#### Top topics by month")
     topics_df = _to_datetime_series(topics_df, "month")
+    topics_class_df["strength"] = pd.to_numeric(topics_class_df.get("strength"), errors="coerce")
+    topics_class_df["topic_id"] = pd.to_numeric(topics_class_df.get("topic_id"), errors="coerce")
+    if "stars_bucket" in topics_class_df.columns:
+        topics_class_df["stars_bucket"] = pd.to_numeric(
+            topics_class_df.get("stars_bucket"),
+            errors="coerce",
+        ).astype("Int64")
+
     if not topics_df.empty:
         topics_df["rank"] = pd.to_numeric(topics_df.get("rank"), errors="coerce")
         topics_df["strength"] = pd.to_numeric(topics_df.get("strength"), errors="coerce")
-        topics_df = topics_df.dropna(subset=["theme", "rank"]).copy()
-        if not topics_df.empty:
-            # Keep chart readable by limiting to most frequent themes.
-            top_themes = topics_df["theme"].value_counts().head(8).index
-            topics_df = topics_df[topics_df["theme"].isin(top_themes)]
-            topics_df["theme_short"] = topics_df["theme"].astype(str).str.slice(0, 48)
-            topic_chart = (
-                alt.Chart(topics_df)
-                .mark_rect(cornerRadius=2)
-                .encode(
-                    x=alt.X("month:T", title="Month"),
-                    y=alt.Y("theme_short:N", title="BERTopic theme"),
-                    color=alt.Color(
-                        "strength:Q",
-                        title="Top-3 weight",
-                        scale=alt.Scale(domain=[1, 3], range=["#dbeafe", "#60a5fa", "#1d4ed8"]),
-                    ),
-                    tooltip=[
-                        alt.Tooltip("month:T", title="Month"),
-                        alt.Tooltip("theme:N", title="Theme"),
-                        alt.Tooltip("rank:Q", title="Rank", format=".0f"),
-                    ],
-                )
-            )
-            st.altair_chart(topic_chart, use_container_width=True)
-        else:
-            st.caption("No monthly topic series available for this result.")
-    else:
+        topics_df["topic_id"] = pd.to_numeric(topics_df.get("topic_id"), errors="coerce")
+        topics_df = topics_df.dropna(subset=["theme", "rank", "strength"]).copy()
+
+    if topics_df.empty and topics_class_df.empty:
         st.caption("No monthly topic series available for this result.")
+    else:
+        base_for_keys = topics_df if not topics_df.empty else topics_class_df
+        extracted_topic_id = base_for_keys["theme"].astype(str).str.extract(r"topic[_\s-]*(\d+)")[0]
+        base_for_keys["topic_key"] = base_for_keys["topic_id"].apply(
+            lambda value: f"topic_{int(value)}" if pd.notna(value) else None
+        )
+        base_for_keys.loc[base_for_keys["topic_key"].isna(), "topic_key"] = extracted_topic_id.apply(
+            lambda value: f"topic_{int(value)}" if pd.notna(value) else None
+        )
+        base_for_keys.loc[base_for_keys["topic_key"].isna(), "topic_key"] = base_for_keys["theme"].astype(str)
+
+        if "topic_terms" not in base_for_keys.columns:
+            base_for_keys["topic_terms"] = ""
+        base_for_keys["topic_terms"] = base_for_keys["topic_terms"].fillna("").astype(str).str.strip()
+        fallback_terms = base_for_keys["theme"].astype(str).str.extract(r":\s*(.+)$", expand=False).fillna("")
+        missing_terms = base_for_keys["topic_terms"].eq("")
+        base_for_keys.loc[missing_terms, "topic_terms"] = fallback_terms.loc[missing_terms]
+        base_for_keys["topic_terms"] = base_for_keys["topic_terms"].apply(
+            lambda value: ", ".join([part.strip() for part in str(value).split(",") if part.strip()][:6])
+        )
+
+        top_topic_keys = (
+            base_for_keys.groupby("topic_key", as_index=False)["strength"]
+            .sum()
+            .sort_values("strength", ascending=False)
+            .head(6)["topic_key"]
+            .tolist()
+        )
+
+        label_rows = (
+            base_for_keys.sort_values(["topic_key", "strength"], ascending=[True, False])
+            .groupby("topic_key", as_index=False)
+            .first()[["topic_key", "topic_terms"]]
+        )
+        topic_label_lookup: dict[str, str] = {}
+        for row in label_rows.itertuples(index=False):
+            key = str(row.topic_key)
+            terms = str(row.topic_terms or "").strip()
+            topic_label_lookup[key] = f"{key}: {terms}" if terms else key
+        topic_order = [topic_label_lookup[key] for key in top_topic_keys if key in topic_label_lookup]
+
+        st.markdown("##### Topics per class (top 6)")
+        st.caption("BERTopic-style class view (class = stars).")
+        if topics_class_df.empty:
+            st.caption("No topic-by-stars class data available for this result.")
+        else:
+            class_df = topics_class_df.copy()
+            extracted_topic_id = class_df["theme"].astype(str).str.extract(r"topic[_\s-]*(\d+)")[0]
+            class_df["topic_key"] = class_df["topic_id"].apply(
+                lambda value: f"topic_{int(value)}" if pd.notna(value) else None
+            )
+            class_df.loc[class_df["topic_key"].isna(), "topic_key"] = extracted_topic_id.apply(
+                lambda value: f"topic_{int(value)}" if pd.notna(value) else None
+            )
+            class_df.loc[class_df["topic_key"].isna(), "topic_key"] = class_df["theme"].astype(str)
+            if class_df.empty:
+                st.caption("No topic-by-stars class data available for this result.")
+            else:
+                if "class_label" not in class_df.columns:
+                    class_df["class_label"] = class_df["stars_bucket"].astype("Int64").astype(str) + "★"
+                class_df["topic_label"] = class_df["topic_key"].map(topic_label_lookup)
+                class_df["topic_label"] = class_df["topic_label"].fillna(class_df["theme"].astype(str))
+                class_topic_order = (
+                    class_df.groupby("topic_label", as_index=False)["strength"]
+                    .sum()
+                    .sort_values("strength", ascending=False)["topic_label"]
+                    .tolist()
+                )
+
+                class_chart = (
+                    alt.Chart(class_df)
+                    .mark_rect(cornerRadius=2)
+                    .encode(
+                        x=alt.X(
+                            "class_label:N",
+                            title="Stars class",
+                            sort=["1★", "5★"],
+                        ),
+                        y=alt.Y("topic_label:N", title="Topic", sort=class_topic_order),
+                        color=alt.Color(
+                            "strength:Q",
+                            title="Strength",
+                            scale=alt.Scale(range=["#dbeafe", "#60a5fa", "#1d4ed8"]),
+                        ),
+                        tooltip=[
+                            alt.Tooltip("class_label:N", title="Stars class"),
+                            alt.Tooltip("topic_label:N", title="Topic"),
+                            alt.Tooltip("rank:Q", title="Rank", format=".0f"),
+                            alt.Tooltip("strength:Q", title="Strength", format=".2f"),
+                        ],
+                    )
+                )
+                st.altair_chart(class_chart.properties(height=280), use_container_width=True)
+
+        st.markdown("##### Topics over time (top 6)")
+        if topics_df.empty:
+            st.caption("No monthly topic series available for this result.")
+        else:
+            time_df = topics_df.copy()
+            extracted_topic_id = time_df["theme"].astype(str).str.extract(r"topic[_\s-]*(\d+)")[0]
+            time_df["topic_key"] = time_df["topic_id"].apply(
+                lambda value: f"topic_{int(value)}" if pd.notna(value) else None
+            )
+            time_df.loc[time_df["topic_key"].isna(), "topic_key"] = extracted_topic_id.apply(
+                lambda value: f"topic_{int(value)}" if pd.notna(value) else None
+            )
+            time_df.loc[time_df["topic_key"].isna(), "topic_key"] = time_df["theme"].astype(str)
+            time_df = time_df[time_df["topic_key"].isin(top_topic_keys)].copy()
+            if time_df.empty:
+                st.caption("No monthly topic series available for this result.")
+            else:
+                timeline = (
+                    time_df.groupby(["month", "topic_key"], as_index=False)["strength"]
+                    .sum()
+                    .sort_values(["month", "topic_key"])
+                )
+                if timeline.empty:
+                    st.caption("No monthly topic series available for this result.")
+                else:
+                    all_months = pd.date_range(
+                        timeline["month"].min(),
+                        timeline["month"].max(),
+                        freq="MS",
+                    )
+                    dense_index = pd.MultiIndex.from_product(
+                        [all_months, top_topic_keys],
+                        names=["month", "topic_key"],
+                    ).to_frame(index=False)
+                    timeline = dense_index.merge(
+                        timeline,
+                        on=["month", "topic_key"],
+                        how="left",
+                    )
+                    timeline["strength"] = timeline["strength"].fillna(0.0)
+                    timeline["topic_label"] = timeline["topic_key"].map(topic_label_lookup)
+
+                    over_time_chart = (
+                        alt.Chart(timeline)
+                        .mark_line(point=True, strokeWidth=2.5)
+                        .encode(
+                            x=alt.X("month:T", title="Month"),
+                            y=alt.Y("strength:Q", title="Topic strength"),
+                            color=alt.Color("topic_label:N", title="Topic", sort=topic_order),
+                            tooltip=[
+                                alt.Tooltip("month:T", title="Month"),
+                                alt.Tooltip("topic_label:N", title="Topic"),
+                                alt.Tooltip("strength:Q", title="Strength", format=".2f"),
+                            ],
+                        )
+                    )
+                    st.altair_chart(over_time_chart.properties(height=320), use_container_width=True)
+
+
+def _render_component_diagnostics(result: dict[str, Any]) -> None:
+    component2 = result.get("component2_diagnostics") or {}
+    resilience = result.get("resilience_context") or {}
+
+    st.markdown("<h3 class='sbp-subsection'>Component diagnostics (v2)</h3>", unsafe_allow_html=True)
+    left, right = st.columns(2, gap="large")
+
+    with left:
+        st.markdown("#### Component 2/3: topic diagnostics")
+        neg_count = component2.get("negative_review_count")
+        st.caption(
+            "Negative reviews used by BERTopic: "
+            f"{int(neg_count) if isinstance(neg_count, (int, float)) else '—'} "
+            "(stars <= 2 AND vader <= -0.05)"
+        )
+
+        terminal_topics = component2.get("terminal_topics") or []
+        if terminal_topics:
+            terminal_df = pd.DataFrame(
+                [
+                    {
+                        "theme": topic.get("theme"),
+                        "share": _format_pct(topic.get("share"), 1),
+                        "count": topic.get("count"),
+                        "recommendation": topic.get("recommendation") or "—",
+                    }
+                    for topic in terminal_topics
+                ]
+            )
+            st.dataframe(
+                terminal_df,
+                use_container_width=True,
+                hide_index=True,
+                column_order=("theme", "share", "count", "recommendation"),
+            )
+        else:
+            st.caption("No terminal-topic signal for this business in Component 2 outputs.")
+
+        gaps = component2.get("topic_recovery_gaps") or []
+        st.markdown("##### Recovery divergence by topic")
+        if gaps:
+            gap_df = pd.DataFrame(
+                [
+                    {
+                        "theme": item.get("theme"),
+                        "closed-open gap": _format_pct(item.get("closed_minus_open_share"), 2),
+                        "closed share": _format_pct(item.get("closed_after_negative"), 2),
+                        "open share": _format_pct(item.get("open_after_negative"), 2),
+                    }
+                    for item in gaps
+                ]
+            )
+            st.dataframe(
+                gap_df,
+                use_container_width=True,
+                hide_index=True,
+                column_order=("theme", "closed-open gap", "closed share", "open share"),
+            )
+        else:
+            st.caption("No topic-level recovery comparison rows matched this business.")
+
+    with right:
+        st.markdown("#### Component 4: resilience context")
+
+        city_context = resilience.get("city_context") or {}
+        if city_context:
+            st.markdown(
+                "<div class='sbp-card'>"
+                f"<p class='sbp-small'><strong>{escape(str(city_context.get('city') or '—'))}, "
+                f"{escape(str(city_context.get('state') or '—'))}</strong></p>"
+                f"<p class='sbp-small'>City closure rate: {escape(_format_pct(city_context.get('closure_rate'), 1))}"
+                " · "
+                f"Percentile: {escape(_format_pct(city_context.get('closure_rate_percentile'), 0))}</p>"
+                f"<p class='sbp-small'>Businesses: {escape(str(city_context.get('businesses') or '—'))}"
+                " · "
+                f"Closed: {escape(str(city_context.get('closed') or '—'))}</p>"
+                "</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.caption("No city-level resilience context available.")
+
+        cuisine_context = resilience.get("cuisine_context") or []
+        st.markdown("##### Matched cuisine closure rates")
+        if cuisine_context:
+            cuisine_df = pd.DataFrame(
+                [
+                    {
+                        "category": item.get("category"),
+                        "closure_rate": _format_pct(item.get("closure_rate"), 1),
+                        "businesses": item.get("businesses"),
+                    }
+                    for item in cuisine_context
+                ]
+            )
+            st.dataframe(
+                cuisine_df,
+                use_container_width=True,
+                hide_index=True,
+                column_order=("category", "closure_rate", "businesses"),
+            )
+        else:
+            st.caption("No cuisine-category overlap found for this business.")
+
+        checkin_context = resilience.get("checkin_floor_context") or {}
+        st.markdown("##### Check-in floor context")
+        if checkin_context:
+            latest_checkins = _first_of(checkin_context, "latest_checkins")
+            latest_checkins_text = "—"
+            if isinstance(latest_checkins, (int, float)):
+                if pd.notna(latest_checkins):
+                    latest_checkins_text = str(int(round(float(latest_checkins))))
+            st.markdown(
+                "<div class='sbp-card'>"
+                f"<p class='sbp-small'>Latest monthly check-ins: "
+                f"<strong>{escape(latest_checkins_text)}</strong></p>"
+                f"<p class='sbp-small'>Bin: {escape(str(checkin_context.get('bin_label') or '—'))}</p>"
+                f"<p class='sbp-small'>Bin closure rate: {escape(_format_pct(checkin_context.get('closure_rate'), 1))}"
+                " · "
+                f"Delta vs floor bin: {escape(_format_pct(checkin_context.get('closure_rate_delta'), 1))}</p>"
+                f"<p class='sbp-small'>Activity floor: {escape(str(checkin_context.get('activity_floor') or '—'))}</p>"
+                "</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.caption("No check-in floor context available.")
+
+        recovery_pattern = resilience.get("recovery_pattern") or {}
+        st.markdown("##### Recovery pattern")
+        if recovery_pattern:
+            st.markdown(
+                "<div class='sbp-card'>"
+                f"<p class='sbp-small'>Had negative phase: "
+                f"<strong>{'yes' if recovery_pattern.get('had_negative_phase') else 'no'}</strong></p>"
+                f"<p class='sbp-small'>Recovered pattern: "
+                f"<strong>{'yes' if recovery_pattern.get('recovered_pattern') else 'no'}</strong></p>"
+                f"<p class='sbp-small'>Sentiment delta: {escape(_format_prob(recovery_pattern.get('sentiment_delta')))}"
+                " · "
+                f"Check-in delta: {escape(_format_prob(recovery_pattern.get('checkin_delta')))}</p>"
+                "</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.caption("No recovery-pattern row available for this business.")
 
 
 def _inject_styles() -> None:
@@ -505,7 +853,7 @@ div[data-testid="stTextInputRootElement"] input:focus {
   box-shadow: 0 0 0 2px rgba(14, 165, 233, 0.18) !important;
 }
 
-.stButton > button, .stFormSubmitButton > button {
+.stFormSubmitButton > button {
   border-radius: 12px !important;
   border: none !important;
   background: linear-gradient(135deg, #0ea5e9, #22c55e) !important;
@@ -514,9 +862,65 @@ div[data-testid="stTextInputRootElement"] input:focus {
   transition: transform 120ms ease, box-shadow 120ms ease;
 }
 
-.stButton > button:hover, .stFormSubmitButton > button:hover {
+.stFormSubmitButton > button:hover {
   transform: translateY(-1px);
   box-shadow: 0 8px 20px rgba(14, 165, 233, 0.25);
+}
+
+.stButton > button {
+  border-radius: 0 !important;
+  border: 1px solid var(--line) !important;
+  background: #f8fafc !important;
+  color: var(--ink) !important;
+  font-weight: 600 !important;
+  padding: 6px 10px !important;
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+
+.stButton > button:hover {
+  transform: none;
+  box-shadow: none;
+  background: #f1f5f9 !important;
+  border-color: rgba(14, 165, 233, 0.45) !important;
+}
+
+.stButton > button p {
+  margin: 0 !important;
+}
+
+.sbp-table-head {
+  margin-top: 8px;
+}
+
+.sbp-table-head-cell {
+  background: #f8fafc;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+}
+
+.sbp-table-cell {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 0;
+  padding: 8px 10px;
+  font-size: 14px;
+  color: var(--ink);
+}
+
+.sbp-table-cell-muted {
+  color: var(--muted);
+}
+
+.sbp-selected-tag {
+  font-weight: 700;
+  color: #0b7285;
+  font-size: 12px;
 }
 
 .sbp-card {
@@ -704,13 +1108,24 @@ div[data-testid="stTextInputRootElement"] input:focus {
 
 div[data-testid="stDataFrame"] {
   border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border-radius: 0;
   overflow: hidden;
-  box-shadow: var(--shadow);
+  box-shadow: none;
 }
 
 div[data-testid="stDataFrame"] [data-testid="stDataFrameResizable"] {
   border: none !important;
+}
+
+div[data-testid="stDataFrame"] table {
+  border-collapse: collapse !important;
+}
+
+div[data-testid="stDataFrame"] th,
+div[data-testid="stDataFrame"] td {
+  border: 1px solid var(--line) !important;
+  text-align: left !important;
+  padding: 8px 10px !important;
 }
 
 @media (max-width: 980px) {
@@ -733,7 +1148,20 @@ div[data-testid="stDataFrame"] [data-testid="stDataFrameResizable"] {
     )
 
 
-def _render_shell_header() -> None:
+def _render_shell_header(page: str) -> None:
+    if page == "Artifact explorer":
+        eyebrow = "Artifact score explorer"
+        title = "Search scored artifact rows and inspect stored model outputs."
+        lede = "Browse precomputed scored businesses by name, location, and risk band."
+        chip_value = "Artifact browse -> Select -> Inspect"
+        chip_body = "Uses scored artifact outputs only. No live inference on this page."
+    else:
+        eyebrow = "Live scoring workflow"
+        title = "Find a restaurant and score closure risk live from Yelp source data."
+        lede = "Search -> Select -> Live score with configurable 12-month window quotas."
+        chip_value = "Live search -> Live score"
+        chip_body = "Runs sentiment + feature pipeline + GRU locally on this machine."
+
     st.markdown(
         """
 <div class="sbp-shell">
@@ -748,18 +1176,24 @@ def _render_shell_header() -> None:
   </div>
   <div class="sbp-hero">
     <div>
-      <p class="sbp-eyebrow">Artifact-first + live fallback</p>
-      <h1>Find a restaurant, score closure risk, and see the likely drivers.</h1>
-      <p class="sbp-lede">Search -> Select -> Score with live inference fallback when artifacts are missing.</p>
+      <p class="sbp-eyebrow">{eyebrow}</p>
+      <h1>{title}</h1>
+      <p class="sbp-lede">{lede}</p>
     </div>
     <div class="sbp-chip">
       <p class="sbp-chip-label">Runtime</p>
-      <p class="sbp-chip-value">Search -> Select -> Score</p>
-      <p>Artifact results load quickly. Live mode kicks in when dependencies and data are ready.</p>
+      <p class="sbp-chip-value">{chip_value}</p>
+      <p>{chip_body}</p>
     </div>
   </div>
 </div>
-""",
+""".format(
+            eyebrow=escape(eyebrow),
+            title=escape(title),
+            lede=escape(lede),
+            chip_value=escape(chip_value),
+            chip_body=escape(chip_body),
+        ),
         unsafe_allow_html=True,
     )
 
@@ -769,19 +1203,58 @@ def _get_service() -> SmallBizPulseService:
     return SmallBizPulseService(Settings.from_env())
 
 
-def _render_health_sidebar(service: SmallBizPulseService) -> None:
+def _render_health_sidebar(service: SmallBizPulseService) -> str:
     checks = service.health()
-    live_ready = bool(checks.get("live_fallback_ready"))
+    live_ready = bool(checks.get("live_scoring_ready") or checks.get("live_fallback_ready"))
     pill_cls = "sbp-pill sbp-pill-good" if live_ready else "sbp-pill sbp-pill-warn"
-    mode = "Live-first ready" if live_ready else "Live-first limited"
+    mode = "Live scoring ready" if live_ready else "Live scoring limited"
+    dependency_status = checks.get("dependency_status") or {}
+    page = "Live scoring"
     with st.sidebar:
+        page = st.radio(
+            "Page",
+            ["Live scoring", "Artifact explorer"],
+            index=0,
+            key="sbp_page_selector",
+        )
         st.markdown("### Runtime")
         st.markdown(
             f"<span class='{pill_cls}'>{escape(mode)}</span>",
             unsafe_allow_html=True,
         )
+        st.markdown("### Dependency indicators")
+        indicator_labels = [
+            ("tensorflow_package", "TensorFlow package"),
+            ("tensorflow_runtime", "TensorFlow runtime"),
+            ("vader_sentiment_package", "vaderSentiment package"),
+            ("nltk_package", "NLTK package"),
+            ("v2_runtime_ready", "V2 runtime ready"),
+            ("v2_gru_model_file", "V2 GRU model file"),
+            ("yelp_business_file", "Yelp business file"),
+            ("yelp_review_file", "Yelp review file"),
+            ("yelp_tip_file", "Yelp tip file"),
+            ("yelp_checkin_file", "Yelp check-in file"),
+            ("v2_bundle_dir", "V2 bundle dir"),
+            ("component2_topics_table", "Component 2 topic table"),
+            ("component3_recommendations_table", "Component 3 recommendation table"),
+            ("component4_city_table", "Component 4 city table"),
+            ("component4_cuisine_table", "Component 4 cuisine table"),
+            ("component4_checkin_table", "Component 4 check-in table"),
+            ("component4_recovery_table", "Component 4 recovery table"),
+        ]
+        indicators_df = pd.DataFrame(
+            [
+                {
+                    "dependency": label,
+                    "status": "ok" if bool(dependency_status.get(key)) else "missing",
+                }
+                for key, label in indicator_labels
+            ]
+        )
+        st.dataframe(indicators_df, use_container_width=True, hide_index=True)
         with st.expander("Health checks"):
             st.json(checks)
+    return page
 
 
 def _render_score(result: dict[str, Any]) -> None:
@@ -827,6 +1300,20 @@ def _render_score(result: dict[str, Any]) -> None:
 </div>
 """,
             unsafe_allow_html=True,
+        )
+
+    data_quality = result.get("data_quality") or {}
+    if data_quality.get("has_mismatch"):
+        expected_reviews = data_quality.get("expected_reviews")
+        observed_reviews = data_quality.get("observed_reviews")
+        coverage_ratio = data_quality.get("coverage_ratio")
+        coverage_text = _format_pct(coverage_ratio, 1) if coverage_ratio is not None else "—"
+        st.warning(
+            "Live data coverage mismatch: "
+            f"observed reviews={observed_reviews if observed_reviews is not None else '—'} vs "
+            f"expected metadata reviews={expected_reviews if expected_reviews is not None else '—'} "
+            f"(coverage={coverage_text}). "
+            "Scores and diagnostics are computed from observed live reviews only."
         )
 
     st.markdown("<div class='sbp-flat-divider'></div>", unsafe_allow_html=True)
@@ -910,6 +1397,7 @@ def _render_score(result: dict[str, Any]) -> None:
             st.caption(str(notes))
 
     _render_trend_charts(result)
+    _render_component_diagnostics(result)
 
     st.markdown("<h3 class='sbp-subsection'>Evidence reviews</h3>", unsafe_allow_html=True)
     evidence = result.get("evidence_reviews") or []
@@ -917,9 +1405,6 @@ def _render_score(result: dict[str, Any]) -> None:
         rows: list[dict[str, Any]] = []
         for review in evidence:
             text = _first_of(review, "snippet", "text", "review_text", "body") or ""
-            text_value = str(text)
-            if len(text_value) > 600:
-                text_value = f"{text_value[:597]}..."
             rows.append(
                 {
                     "date": _first_of(review, "date", "review_date", "month"),
@@ -931,7 +1416,7 @@ def _render_score(result: dict[str, Any]) -> None:
                         "negative_probability",
                         "p_neg",
                     ),
-                    "review_text": text_value,
+                    "review_text": str(text),
                 }
             )
 
@@ -959,41 +1444,29 @@ def _render_score(result: dict[str, Any]) -> None:
         )
 
 
-def main() -> None:
-    st.set_page_config(
-        page_title="SmallBizPulse Dashboard",
-        page_icon="📊",
-        layout="wide",
-    )
-    _inject_styles()
-    _render_shell_header()
-
-    try:
-        service = _get_service()
-    except Exception as exc:
-        st.error(f"Service failed to initialize: {exc}")
-        st.stop()
-
-    _render_health_sidebar(service)
-
-    if "candidates" not in st.session_state:
-        st.session_state["candidates"] = []
-    if "score_result" not in st.session_state:
-        st.session_state["score_result"] = None
-    if "force_live_inference" not in st.session_state:
-        st.session_state["force_live_inference"] = False
+def _render_live_scoring_page(service: SmallBizPulseService) -> None:
+    if "live_candidates" not in st.session_state:
+        st.session_state["live_candidates"] = []
+    if "live_score_result" not in st.session_state:
+        st.session_state["live_score_result"] = None
+    if "live_selected_business_id" not in st.session_state:
+        st.session_state["live_selected_business_id"] = None
+    if "live_min_active_months" not in st.session_state:
+        st.session_state["live_min_active_months"] = int(service.DEFAULT_MIN_ACTIVE_MONTHS)
+    if "live_min_reviews_in_window" not in st.session_state:
+        st.session_state["live_min_reviews_in_window"] = int(service.DEFAULT_MIN_REVIEWS_IN_WINDOW)
 
     st.markdown(
         """
 <div class="sbp-step">
   <p class="sbp-eyebrow">Step 1</p>
-  <h2>Search businesses</h2>
+  <h2>Search businesses (live source)</h2>
 </div>
 """,
         unsafe_allow_html=True,
     )
 
-    with st.form("search_form"):
+    with st.form("live_search_form"):
         col1, col2, col3 = st.columns([3, 2, 1])
         with col1:
             name = st.text_input("Company name", placeholder="e.g., Five Guys")
@@ -1002,79 +1475,76 @@ def main() -> None:
         with col3:
             state = st.text_input("State (optional)", max_chars=2)
         include_unscorable = st.checkbox("Include unscorable matches", value=False)
-        submitted = st.form_submit_button("Search")
+        quota_col1, quota_col2 = st.columns(2)
+        with quota_col1:
+            min_active_months = st.slider(
+                "Min active months in 12-month window",
+                min_value=0,
+                max_value=12,
+                value=int(st.session_state["live_min_active_months"]),
+                key="live_min_active_months",
+            )
+        with quota_col2:
+            min_reviews_in_window = st.slider(
+                "Min reviews in 12-month window",
+                min_value=0,
+                max_value=120,
+                value=int(st.session_state["live_min_reviews_in_window"]),
+                key="live_min_reviews_in_window",
+            )
+        submitted = st.form_submit_button("Search live")
 
     if submitted:
         if not name.strip():
             st.warning("Enter a company name.")
         else:
             try:
-                with st.spinner("Searching..."):
-                    st.session_state["candidates"] = service.search_businesses(
+                with st.spinner("Searching live businesses..."):
+                    st.session_state["live_candidates"] = service.search_businesses(
                         name=name.strip(),
                         city=city.strip() or None,
                         state=state.strip() or None,
                         limit=10,
                         scorable_only=not include_unscorable,
+                        min_active_months=min_active_months,
+                        min_reviews_in_window=min_reviews_in_window,
+                        live_only=True,
                     )
-                st.session_state["score_result"] = None
+                st.session_state["live_score_result"] = None
+                st.session_state["live_selected_business_id"] = None
             except ServiceError as exc:
                 st.error(f"Search failed: {exc}")
 
-    candidates = st.session_state.get("candidates", [])
+    candidates = st.session_state.get("live_candidates", [])
     if candidates:
         st.markdown("<h3 class='sbp-subsection'>Candidates</h3>", unsafe_allow_html=True)
-        for candidate in candidates:
-            mode = "artifact ready" if candidate.get("risk_available") else "live only"
-            st.markdown(
-                f"""
-<div class="sbp-card">
-  <p class="sbp-candidate-name">{escape(str(candidate.get("name") or "Unknown business"))}</p>
-  <p class="sbp-small">
-    {escape(_format_location(candidate.get("city"), candidate.get("state")))}
-    · ID: {escape(str(candidate.get("business_id") or "—"))}
-  </p>
-  <p class="sbp-small">
-    Reviews: {escape(str(candidate.get("review_count") if candidate.get("review_count") is not None else "—"))}
-    · {mode}
-  </p>
-</div>
-""",
-                unsafe_allow_html=True,
-            )
-
-        option_map = {
-            f"{c.get('name') or 'Unknown'} | {_format_location(c.get('city'), c.get('state'))} "
-            f"| reviews: {c.get('review_count') if c.get('review_count') is not None else '—'} "
-            f"| {'artifact' if c.get('risk_available') else 'live'}": c
-            for c in candidates
-        }
-        selected_label = st.selectbox("Select a business to score", list(option_map.keys()))
-        selected = option_map[selected_label]
-        force_live = st.checkbox(
-            "Force live inference (ignore artifact cache)",
-            key="force_live_inference",
-            help="When enabled, artifact scores are bypassed and only live scoring is attempted for this click.",
+        st.caption("Select one row in the table, then click `Score selected`.")
+        table_rows = [
+            {
+                "name": str(candidate.get("name") or "Unknown business"),
+                "location": _format_location(candidate.get("city"), candidate.get("state")),
+                "status": str(candidate.get("status") or "Unknown"),
+                "reviews": str(candidate.get("review_count") if candidate.get("review_count") is not None else "—"),
+                "last_review_month": str(candidate.get("last_review_month") or "—"),
+                "business_id": str(candidate.get("business_id") or ""),
+            }
+            for candidate in candidates
+        ]
+        selected_business_id = _render_search_table_with_action(
+            table_rows,
+            key_prefix="live_candidates",
+            action_label="Score selected",
         )
-        if force_live:
-            st.warning("Force live inference is ON: artifact fallback is bypassed for this score request.")
-        if st.button("Score business", type="primary"):
+        if selected_business_id:
+            st.session_state["live_selected_business_id"] = selected_business_id
             try:
-                with st.spinner("Scoring..."):
-                    result = service.score_business(
-                        selected.get("business_id") or "",
-                        force_live_inference=force_live,
+                with st.spinner("Running live scoring..."):
+                    result = service.score_business_live(
+                        selected_business_id,
+                        min_active_months=int(st.session_state["live_min_active_months"]),
+                        min_reviews_in_window=int(st.session_state["live_min_reviews_in_window"]),
                     )
-                    st.session_state["score_result"] = result
-                    if (
-                        force_live
-                        and result.get("availability") != "scored"
-                        and selected.get("risk_available")
-                    ):
-                        st.info(
-                            "Live scoring was forced and failed. "
-                            "Artifact score exists for this business - run again with force-live OFF."
-                        )
+                    st.session_state["live_score_result"] = result
             except ServiceError as exc:
                 st.error(f"Scoring failed: {exc}")
     else:
@@ -1083,9 +1553,120 @@ def main() -> None:
             unsafe_allow_html=True,
         )
 
-    result = st.session_state.get("score_result")
+    result = st.session_state.get("live_score_result")
     if isinstance(result, dict):
         _render_score(result)
+
+
+def _render_artifact_explorer_page(service: SmallBizPulseService) -> None:
+    if "artifact_candidates" not in st.session_state:
+        st.session_state["artifact_candidates"] = []
+    if "artifact_score_result" not in st.session_state:
+        st.session_state["artifact_score_result"] = None
+    if "artifact_selected_business_id" not in st.session_state:
+        st.session_state["artifact_selected_business_id"] = None
+
+    st.markdown(
+        """
+<div class="sbp-step">
+  <p class="sbp-eyebrow">Artifact Explorer</p>
+  <h2>Search scored artifacts</h2>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+    risk_bands = ["Any"] + service.artifact_risk_bands()
+    with st.form("artifact_search_form"):
+        col1, col2, col3, col4 = st.columns([3, 2, 1, 2])
+        with col1:
+            name = st.text_input("Company name (optional)", placeholder="e.g., Five Guys")
+        with col2:
+            city = st.text_input("City (optional)", key="artifact_city")
+        with col3:
+            state = st.text_input("State (optional)", max_chars=2, key="artifact_state")
+        with col4:
+            risk_band = st.selectbox("Risk band", options=risk_bands, index=0)
+        limit = st.slider("Max rows", min_value=10, max_value=200, value=25, step=5)
+        submitted = st.form_submit_button("Search artifacts")
+
+    if submitted:
+        try:
+            with st.spinner("Searching scored artifacts..."):
+                st.session_state["artifact_candidates"] = service.search_scored_artifacts(
+                    name=name.strip(),
+                    city=city.strip() or None,
+                    state=state.strip() or None,
+                    risk_bucket=None if risk_band == "Any" else risk_band,
+                    limit=limit,
+                )
+            st.session_state["artifact_score_result"] = None
+            st.session_state["artifact_selected_business_id"] = None
+        except ServiceError as exc:
+            st.error(f"Artifact search failed: {exc}")
+
+    candidates = st.session_state.get("artifact_candidates", [])
+    if candidates:
+        st.markdown("<h3 class='sbp-subsection'>Scored artifact rows</h3>", unsafe_allow_html=True)
+        st.caption("Select one row in the table, then click `View selected`.")
+        table_rows = [
+            {
+                "name": str(candidate.get("name") or "Unknown business"),
+                "location": _format_location(candidate.get("city"), candidate.get("state")),
+                "status": str(candidate.get("status") or "Unknown"),
+                "reviews": str(candidate.get("review_count") if candidate.get("review_count") is not None else "—"),
+                "last_review_month": str(candidate.get("last_review_month") or "—"),
+                "risk_score": _format_prob(candidate.get("risk_score")),
+                "risk_band": str(candidate.get("risk_bucket") or "—"),
+                "business_id": str(candidate.get("business_id") or ""),
+            }
+            for candidate in candidates
+        ]
+        selected_business_id = _render_search_table_with_action(
+            table_rows,
+            key_prefix="artifact_candidates",
+            action_label="View selected",
+        )
+        if selected_business_id:
+            st.session_state["artifact_selected_business_id"] = selected_business_id
+            try:
+                with st.spinner("Loading artifact score..."):
+                    result = service.score_business_artifact(selected_business_id)
+                    st.session_state["artifact_score_result"] = result
+            except ServiceError as exc:
+                st.error(f"Artifact score load failed: {exc}")
+    else:
+        st.markdown(
+            "<div class='sbp-card'><p class='sbp-empty'>No artifact rows yet. Search to load scored businesses.</p></div>",
+            unsafe_allow_html=True,
+        )
+
+    result = st.session_state.get("artifact_score_result")
+    if isinstance(result, dict):
+        _render_score(result)
+
+
+def main() -> None:
+    st.set_page_config(
+        page_title="SmallBizPulse Dashboard",
+        page_icon="📊",
+        layout="wide",
+    )
+    _inject_styles()
+
+    try:
+        service = _get_service()
+    except Exception as exc:
+        st.error(f"Service failed to initialize: {exc}")
+        st.stop()
+
+    page = _render_health_sidebar(service)
+    _render_shell_header(page)
+
+    if page == "Artifact explorer":
+        _render_artifact_explorer_page(service)
+    else:
+        _render_live_scoring_page(service)
 
 
 if __name__ == "__main__":

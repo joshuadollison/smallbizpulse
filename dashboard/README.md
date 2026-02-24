@@ -2,7 +2,7 @@
 
 Streamlit dashboard for restaurant closure-risk scoring (backed by shared service logic in `app/`).
 
-The runtime is live-first (with artifact fallback) when local Yelp data + optional ML dependencies are available.
+The runtime is `v2`-first when a v2 bundle is present, with live fallback available from local Yelp data.
 
 ## Structure
 - `streamlit_app.py` Streamlit UI entrypoint
@@ -19,6 +19,7 @@ The runtime is live-first (with artifact fallback) when local Yelp data + option
 - `SBP_ARTIFACT_ROOT` default: `models/artifacts`
 - `SBP_MODEL_DIR` default: `models/artifacts/models`
 - `SBP_SENTIMENT_DIR` default: `models/artifacts/transformer_sentiment_distilbert`
+- `SBP_V2_BUNDLE_DIR` default: `models/v2_artifacts/v2_artifacts_colab_bundle` (or newest valid bundle under `models/v2_artifacts`)
 - `SBP_YELP_DATA_DIR` optional path to Yelp JSON files for live fallback
 - `SBP_ENABLE_LIVE_FALLBACK` default: `true`
 - `SBP_PREFER_LIVE_SCORING` default: `true`
@@ -28,6 +29,22 @@ The runtime is live-first (with artifact fallback) when local Yelp data + option
 Live fallback expects these files in `SBP_YELP_DATA_DIR`:
 - `yelp_academic_dataset_business.json`
 - `yelp_academic_dataset_review.json`
+
+V2 runtime expects at least:
+- `<bundle>/component1_survival/rule_model.json`
+- `<bundle>/component1_survival/baseline_models.joblib`
+- `<bundle>/monthly_signal_panel.csv`
+
+Optional but used for richer dashboard sections:
+- `<bundle>/component2_topics/negative_review_topics.csv`
+- `<bundle>/component2_topics/terminal_topics.csv`
+- `<bundle>/component2_topics/recovery_comparison.csv`
+- `<bundle>/component2_topics/topic_terms.csv`
+- `<bundle>/component3_recommendations/topic_recommendations.csv`
+- `<bundle>/component4_resilience/city_closure_rates.csv`
+- `<bundle>/component4_resilience/cuisine_closure_rates.csv`
+- `<bundle>/component4_resilience/checkin_floor_analysis.csv`
+- `<bundle>/component4_resilience/recovery_patterns.csv`
 
 ## Run locally
 ```bash

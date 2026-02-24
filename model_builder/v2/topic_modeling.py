@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import re
 from typing import Any, Iterable
 
 import numpy as np
@@ -22,6 +23,11 @@ class TopicModelConfig:
     min_topic_size: int = 20
     terminal_review_count: int = 10
     nr_topics: str | int = "auto"
+    vectorizer_stop_words: str | list[str] | None = "english"
+    vectorizer_ngram_range: tuple[int, int] = (1, 2)
+    vectorizer_min_df: int = 2
+    vectorizer_max_df: float = 0.95
+    vectorizer_token_pattern: str = r"(?u)\b[a-zA-Z][a-zA-Z]+\b"
 
 
 @dataclass(frozen=True)
@@ -37,6 +43,20 @@ class TopicModelArtifacts:
 
 
 
+_TOPIC_DOMAIN_STOP_WORDS = {
+    "dont",
+    "didnt",
+    "ive",
+    "im",
+    "youre",
+    "thats",
+    "cant",
+    "couldnt",
+    "wont",
+    "wouldnt",
+}
+
+
 def _require_bertopic() -> Any:
     try:
         from bertopic import BERTopic
@@ -47,6 +67,74 @@ def _require_bertopic() -> Any:
             "BERTopic is required for Component 2. Install `bertopic` before training."
         ) from exc
 
+
+def _build_vectorizer(config: TopicModelConfig) -> Any:
+    try:
+        from sklearn.feature_extraction.text import CountVectorizer
+    except Exception as exc:  # pragma: no cover - optional dependency guard
+        raise TopicModelDependencyError(
+            "scikit-learn is required for BERTopic vectorization. Install `scikit-learn`."
+        ) from exc
+
+    min_n, max_n = config.vectorizer_ngram_range
+    return CountVectorizer(
+        stop_words=config.vectorizer_stop_words,
+        ngram_range=(int(min_n), int(max_n)),
+        min_df=int(config.vectorizer_min_df),
+        max_df=float(config.vectorizer_max_df),
+        token_pattern=config.vectorizer_token_pattern,
+    )
+
+
+
+def _resolve_stop_words(vectorizer_model: Any) -> set[str]:
+    stop_words: set[str] = set(_TOPIC_DOMAIN_STOP_WORDS)
+    try:
+        configured = vectorizer_model.get_stop_words()
+    except Exception:
+        configured = None
+
+    if configured is not None:
+        for token in configured:
+            normalized = str(token).strip().casefold()
+            if normalized:
+                stop_words.add(normalized)
+    return stop_words
+
+
+def _normalize_topic_term(term: str) -> str:
+    return re.sub(r"\s+", " ", str(term).casefold()).strip()
+
+
+def _all_tokens_are_stop_words(term: str, stop_words: set[str]) -> bool:
+    tokens = re.findall(r"[a-z]+", term)
+    if not tokens:
+        return True
+    return all(token in stop_words for token in tokens)
+
+
+def _sanitize_topic_terms(
+    term_payload: list[tuple[str, float]],
+    *,
+    stop_words: set[str],
+) -> tuple[list[str], list[float]]:
+    terms: list[str] = []
+    weights: list[float] = []
+    seen: set[str] = set()
+
+    for raw_term, raw_weight in term_payload[:20]:
+        term = _normalize_topic_term(raw_term)
+        if not term:
+            continue
+        if _all_tokens_are_stop_words(term, stop_words):
+            continue
+        if term in seen:
+            continue
+        seen.add(term)
+        terms.append(term)
+        weights.append(float(raw_weight))
+
+    return terms, weights
 
 
 def filter_negative_reviews(
@@ -79,7 +167,12 @@ def filter_negative_reviews(
 
 
 
-def _build_topic_terms_table(topic_model: Any) -> pd.DataFrame:
+def _build_topic_terms_table(
+    topic_model: Any,
+    *,
+    stop_words: set[str] | None = None,
+) -> pd.DataFrame:
+    stop_words_set = stop_words or set()
     topic_rows: list[dict[str, Any]] = []
 
     topics = topic_model.get_topics()
@@ -89,8 +182,12 @@ def _build_topic_terms_table(topic_model: Any) -> pd.DataFrame:
         if not term_payload:
             continue
 
-        terms = [term for term, _ in term_payload[:20]]
-        top_weights = [float(weight) for _, weight in term_payload[:20]]
+        terms, top_weights = _sanitize_topic_terms(
+            term_payload,
+            stop_words=stop_words_set,
+        )
+        if not terms:
+            continue
         topic_rows.append(
             {
                 "topic_id": int(topic_id),
@@ -214,10 +311,12 @@ def train_diagnostic_topic_model(
         )
 
     BERTopic = _require_bertopic()
+    vectorizer_model = _build_vectorizer(cfg)
 
     topic_model = BERTopic(
         nr_topics=cfg.nr_topics,
         min_topic_size=int(cfg.min_topic_size),
+        vectorizer_model=vectorizer_model,
         calculate_probabilities=True,
         verbose=False,
     )
@@ -225,7 +324,10 @@ def train_diagnostic_topic_model(
     texts = negative_df["text"].tolist()
     topics, probabilities = topic_model.fit_transform(texts)
 
-    topic_terms_df = _build_topic_terms_table(topic_model)
+    topic_terms_df = _build_topic_terms_table(
+        topic_model,
+        stop_words=_resolve_stop_words(vectorizer_model),
+    )
 
     topic_confidence: np.ndarray
     if probabilities is None:
